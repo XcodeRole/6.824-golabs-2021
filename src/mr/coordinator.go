@@ -49,7 +49,7 @@ func (rq *Reducequeue) isEmpty() bool {
 	}
 }
 
-func (rq *Reducequeue) Enqueue(taskno int8) {
+func (rq *Reducequeue) Enqueue(taskno int) {
 	rq.mu.Lock()
 	rq.q = append(rq.q, taskno)
 	rq.mu.Unlock()
@@ -69,6 +69,7 @@ type Coordinator struct {
 	rq            Reducequeue
 	mapcounter    int
 	reducecounter int
+	idcounter     int
 	cmu           sync.Mutex
 }
 
@@ -81,14 +82,15 @@ func (c *Coordinator) Dispatch(args *DispatchArgs, reply *DispatchReply) error {
 		reply.taskType = 1
 	} else if c.reducecounter != 0 {
 		reply.taskType = 2
-		reply.nReduce = c.rq.Dequeue()
+		reply.noReduce = c.rq.Dequeue()
 	} else {
 		reply.taskType = 3
 	}
 	return nil
 }
 
-func (c *Coordinator) ReportDone(args *ReportArgs, reply *ReportRelpy) error {
+//worker完成一个map或者reduce任务，向coordnator报告
+func (c *Coordinator) ReportDone(args *ReportArgs, reply *ReportReply) error {
 	c.cmu.Lock()
 	switch args.tag {
 	case 0:
@@ -96,6 +98,15 @@ func (c *Coordinator) ReportDone(args *ReportArgs, reply *ReportRelpy) error {
 	case 1:
 		c.reducecounter -= 1
 	}
+	c.cmu.Unlock()
+	return nil
+}
+
+//给worker分配id
+func (c *Coordinator) InitId(args *InitArgs, reply *InitReply) error {
+	c.cmu.Lock()
+	reply.id = c.idcounter
+	c.idcounter += 1
 	c.cmu.Unlock()
 	return nil
 }
@@ -168,6 +179,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		},
 		mapcounter:    len(files),
 		reducecounter: nReduce,
+		idcounter:     0,
 		cmu:           sync.Mutex{},
 	}
 	for i := 0; i < nReduce; i++ {

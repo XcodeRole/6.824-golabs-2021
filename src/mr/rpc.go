@@ -35,15 +35,22 @@ type DispatchArgs struct {
 //这里存在一种情况，就是map任务分配完了，但是还没执行完，所以不能执行reduce任务，这时候就需要wait
 type DispatchReply struct {
 	filename string
-	taskType int8    //0-map 1-wait 2-reduce 3-finish
-	nReduce  [2]int8 //reduce的任务号
+	taskType int //0-map 1-wait 2-reduce 3-finish
+	noReduce int //reduce的任务号
 }
 
 type ReportArgs struct {
 	tag int //0-map 1-reduce
 }
 
-type ReportRelpy struct {
+type ReportReply struct {
+}
+
+type InitArgs struct {
+}
+
+type InitReply struct {
+	id int
 }
 
 // Cook up a unique-ish UNIX-domain socket name

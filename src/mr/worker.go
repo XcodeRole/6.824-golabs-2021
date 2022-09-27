@@ -1,10 +1,17 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io/ioutil"
 	"log"
 	"net/rpc"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 )
 
 //
@@ -25,17 +32,126 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 //
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+	reducef func(string, []string) string,
+	nReduce int) {
 
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	id := GetID()
+	for {
+		reply := CallDispatch()
+		switch reply.taskType {
+		case 0:
+			file, err := os.Open(reply.filename)
+			if err != nil {
+				log.Fatalf("cannot open %v", reply.filename)
+			}
+			content, err := ioutil.ReadAll(file)
+			if err != nil {
+				log.Fatalf("cannot read %v", reply.filename)
+			}
+			kva := mapf(reply.filename, string(content))
+			write2tmpfile(kva, id, nReduce)
+			ReportDone(0)
+		case 1:
+			time.Sleep(time.Second)
+		case 2:
+			files, err := ioutil.ReadDir(".")
+			if err != nil {
+				log.Fatal(err)
+			}
+			var kva []KeyValue
+			reducesuffix := strconv.Itoa(reply.noReduce)
+			for _, fileinfo := range files {
+				filename := fileinfo.Name()
+				if strings.HasSuffix(filename, reducesuffix) {
+					file, err := os.Open(filename)
+					if err != nil {
+						log.Fatal(err)
+					}
+					dec := json.NewDecoder(file)
+					for {
+						var kv KeyValue
+						if err := dec.Decode(&kv); err != nil {
+							break
+						}
+						kva = append(kva, kv)
+					}
+				}
+			}
+			//copy from sequential code
+			sort.Sort(ByKey(kva))
+			oname := "mr-out-" + reducesuffix
+			ofile, _ := os.Create(oname)
+			i := 0
+			for i < len(kva) {
+				j := i + 1
+				for j < len(kva) && kva[j].Key == kva[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, kva[k].Value)
+				}
+				output := reducef(kva[i].Key, values)
 
+				// this is the correct format for each line of Reduce output.
+				fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+
+				i = j
+			}
+			ofile.Close()
+			ReportDone(1)
+		case 3:
+			break
+		}
+
+	}
+
+}
+
+func ReportDone(tag int) {
+	args := ReportArgs{tag: tag}
+	reply := ReportReply{}
+	call("Coordinator.ReportDone", &args, &reply)
+}
+
+func GetID() int {
+	args := InitArgs{}
+	reply := InitReply{}
+	call("Coordinator.Dispatch", &args, &reply)
+	return reply.id
+}
+
+func write2tmpfile(kva []KeyValue, id int, nReduce int) {
+
+	for _, kv := range kva {
+		reduceid := strconv.Itoa(ihash(kv.Key) % nReduce)
+		workerid := strconv.Itoa(id)
+		filename := "mr-" + workerid + "-" + reduceid
+		file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Fatal("can't create middle file")
+		}
+		enc := json.NewEncoder(file)
+		err = enc.Encode(&kv)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 }
 
 //
@@ -43,22 +159,23 @@ func Worker(mapf func(string, string) []KeyValue,
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func CallExample() {
+func CallDispatch() DispatchReply {
 
 	// declare an argument structure.
-	args := ExampleArgs{}
+	args := DispatchArgs{}
 
 	// fill in the argument(s).
-	args.X = 99
+	// args.X = 99
 
 	// declare a reply structure.
-	reply := ExampleReply{}
+	reply := DispatchReply{}
 
 	// send the RPC request, wait for the reply.
-	call("Coordinator.Example", &args, &reply)
+	call("Coordinator.Dispatch", &args, &reply)
 
 	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	// fmt.Printf("reply.Y %v\n", reply.Y)
+	return reply
 }
 
 //
