@@ -53,17 +53,17 @@ func Worker(mapf func(string, string) []KeyValue,
 	id := GetID()
 	for {
 		reply := CallDispatch()
-		switch reply.taskType {
+		switch reply.TaskType {
 		case 0:
-			file, err := os.Open(reply.filename)
+			file, err := os.Open(reply.Filename)
 			if err != nil {
-				log.Fatalf("cannot open %v", reply.filename)
+				log.Fatalf("cannot open %v", reply.Filename)
 			}
 			content, err := ioutil.ReadAll(file)
 			if err != nil {
-				log.Fatalf("cannot read %v", reply.filename)
+				log.Fatalf("cannot read %v", reply.Filename)
 			}
-			kva := mapf(reply.filename, string(content))
+			kva := mapf(reply.Filename, string(content))
 			write2tmpfile(kva, id, nReduce)
 			ReportDone(0)
 		case 1:
@@ -74,7 +74,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				log.Fatal(err)
 			}
 			var kva []KeyValue
-			reducesuffix := strconv.Itoa(reply.noReduce)
+			reducesuffix := strconv.Itoa(reply.NoReduce)
 			for _, fileinfo := range files {
 				filename := fileinfo.Name()
 				if strings.HasSuffix(filename, reducesuffix) {
@@ -124,7 +124,7 @@ func Worker(mapf func(string, string) []KeyValue,
 }
 
 func ReportDone(tag int) {
-	args := ReportArgs{tag: tag}
+	args := ReportArgs{Tag: tag}
 	reply := ReportReply{}
 	call("Coordinator.ReportDone", &args, &reply)
 }
@@ -132,8 +132,8 @@ func ReportDone(tag int) {
 func GetID() int {
 	args := InitArgs{}
 	reply := InitReply{}
-	call("Coordinator.Dispatch", &args, &reply)
-	return reply.id
+	call("Coordinator.InitId", &args, &reply)
+	return reply.Id
 }
 
 func write2tmpfile(kva []KeyValue, id int, nReduce int) {

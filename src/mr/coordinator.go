@@ -15,6 +15,8 @@ type Mapqueue struct {
 }
 
 func (mq *Mapqueue) isEmpty() bool {
+	mq.mu.Lock()
+	defer mq.mu.Unlock()
 	if len(mq.q) == 0 {
 		return true
 	} else {
@@ -24,15 +26,15 @@ func (mq *Mapqueue) isEmpty() bool {
 
 func (mq *Mapqueue) Enqueue(str string) {
 	mq.mu.Lock()
+	defer mq.mu.Unlock()
 	mq.q = append(mq.q, str)
-	mq.mu.Unlock()
 }
 
 func (mq *Mapqueue) Dequeue() string {
 	mq.mu.Lock()
+	defer mq.mu.Unlock()
 	var file string = mq.q[0]
 	mq.q = mq.q[1:len(mq.q)]
-	mq.mu.Unlock()
 	return file
 }
 
@@ -42,6 +44,8 @@ type Reducequeue struct {
 }
 
 func (rq *Reducequeue) isEmpty() bool {
+	rq.mu.Lock()
+	defer rq.mu.Unlock()
 	if len(rq.q) == 0 {
 		return true
 	} else {
@@ -51,15 +55,15 @@ func (rq *Reducequeue) isEmpty() bool {
 
 func (rq *Reducequeue) Enqueue(taskno int) {
 	rq.mu.Lock()
+	defer rq.mu.Unlock()
 	rq.q = append(rq.q, taskno)
-	rq.mu.Unlock()
 }
 
 func (rq *Reducequeue) Dequeue() int {
 	rq.mu.Lock()
+	defer rq.mu.Unlock()
 	var taskno int = rq.q[0]
 	rq.q = rq.q[1:len(rq.q)]
-	rq.mu.Unlock()
 	return taskno
 }
 
@@ -76,15 +80,15 @@ type Coordinator struct {
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) Dispatch(args *DispatchArgs, reply *DispatchReply) error {
 	if !c.mq.isEmpty() {
-		reply.taskType = 0
-		reply.filename = c.mq.Dequeue()
+		reply.TaskType = 0
+		reply.Filename = c.mq.Dequeue()
 	} else if c.mapcounter != 0 {
-		reply.taskType = 1
+		reply.TaskType = 1
 	} else if c.reducecounter != 0 {
-		reply.taskType = 2
-		reply.noReduce = c.rq.Dequeue()
+		reply.TaskType = 2
+		reply.NoReduce = c.rq.Dequeue()
 	} else {
-		reply.taskType = 3
+		reply.TaskType = 3
 	}
 	return nil
 }
@@ -92,7 +96,7 @@ func (c *Coordinator) Dispatch(args *DispatchArgs, reply *DispatchReply) error {
 //worker完成一个map或者reduce任务，向coordnator报告
 func (c *Coordinator) ReportDone(args *ReportArgs, reply *ReportReply) error {
 	c.cmu.Lock()
-	switch args.tag {
+	switch args.Tag {
 	case 0:
 		c.mapcounter -= 1
 	case 1:
@@ -105,9 +109,9 @@ func (c *Coordinator) ReportDone(args *ReportArgs, reply *ReportReply) error {
 //给worker分配id
 func (c *Coordinator) InitId(args *InitArgs, reply *InitReply) error {
 	c.cmu.Lock()
-	reply.id = c.idcounter
+	defer c.cmu.Unlock()
+	reply.Id = c.idcounter
 	c.idcounter += 1
-	c.cmu.Unlock()
 	return nil
 }
 
