@@ -116,7 +116,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			ofile.Close()
 			ReportDone(1)
 		case 3:
-			break
+			os.Exit(0)
 		}
 
 	}
@@ -185,7 +185,7 @@ func CallDispatch() DispatchReply {
 //
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := "/tmp/coordinator.sock"
+	sockname := coordinatorSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
 		log.Fatal("dialing:", err)

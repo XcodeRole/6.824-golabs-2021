@@ -7,6 +7,7 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 type Mapqueue struct {
@@ -84,9 +85,15 @@ func (c *Coordinator) Dispatch(args *DispatchArgs, reply *DispatchReply) error {
 		reply.Filename = c.mq.Dequeue()
 	} else if c.mapcounter != 0 {
 		reply.TaskType = 1
-	} else if c.reducecounter != 0 {
+	} else if !c.rq.isEmpty() {
 		reply.TaskType = 2
 		reply.NoReduce = c.rq.Dequeue()
+	} else if c.reducecounter != 0 {
+		/*
+			这种情况是考虑到当前worker要等待其他worker执行完reduce。
+			一旦其他worker执行的reduce任务失败了，还需要重新分配reduce
+		*/
+		reply.TaskType = 1
 	} else {
 		reply.TaskType = 3
 	}
@@ -96,13 +103,13 @@ func (c *Coordinator) Dispatch(args *DispatchArgs, reply *DispatchReply) error {
 //worker完成一个map或者reduce任务，向coordnator报告
 func (c *Coordinator) ReportDone(args *ReportArgs, reply *ReportReply) error {
 	c.cmu.Lock()
+	defer c.cmu.Unlock()
 	switch args.Tag {
 	case 0:
 		c.mapcounter -= 1
 	case 1:
 		c.reducecounter -= 1
 	}
-	c.cmu.Unlock()
 	return nil
 }
 
@@ -132,7 +139,7 @@ func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
 	//l, e := net.Listen("tcp", ":1234")
-	sockname := "/tmp/coordinator.sock"
+	sockname := coordinatorSock()
 	os.Remove(sockname)
 	l, e := net.Listen("unix", sockname)
 	if e != nil {
@@ -158,8 +165,11 @@ func (c *Coordinator) Done() bool {
 	//但是这样需要worker运行完之后报告给coordinator,并且对这个数的操作要上锁
 
 	//之前想着不用在map和reduce之间设置全局同步屏障，但是好像不太行，前面的想法都是基于map和reduce异步执行的，不太对，后续
-
-	if c.reducecounter == 0 {
+	c.cmu.Lock()
+	flag := c.reducecounter
+	c.cmu.Unlock()
+	if flag == 0 {
+		time.Sleep(time.Second * 10)
 		ret = true
 	}
 	return ret
