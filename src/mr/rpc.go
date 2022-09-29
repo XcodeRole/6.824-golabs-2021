@@ -40,18 +40,20 @@ type DispatchReply struct {
 }
 
 type ReportArgs struct {
-	Tag int //0-map 1-reduce
+	Tag      int //0-map 1-reduce
+	Filename string
+	Reduceno int
 }
 
 type ReportReply struct {
 }
 
-type InitArgs struct {
-}
+// type InitArgs struct {
+// }
 
-type InitReply struct {
-	Id int
-}
+// type InitReply struct {
+// 	Id int
+// }
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

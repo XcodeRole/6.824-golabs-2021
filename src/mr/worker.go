@@ -50,7 +50,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
-	id := GetID()
+	// id := GetID()
 	for {
 		reply := CallDispatch()
 		switch reply.TaskType {
@@ -64,8 +64,8 @@ func Worker(mapf func(string, string) []KeyValue,
 				log.Fatalf("cannot read %v", reply.Filename)
 			}
 			kva := mapf(reply.Filename, string(content))
-			write2tmpfile(kva, id, nReduce)
-			ReportDone(0)
+			write2tmpfile(kva, reply.Filename, nReduce)
+			ReportDone(reply.Filename)
 		case 1:
 			time.Sleep(time.Second)
 		case 2:
@@ -114,7 +114,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				i = j
 			}
 			ofile.Close()
-			ReportDone(1)
+			ReportDone(reply.NoReduce)
 		case 3:
 			os.Exit(0)
 		}
@@ -123,25 +123,45 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func ReportDone(tag int) {
-	args := ReportArgs{Tag: tag}
+func ReportDone(a interface{}) {
+	args := ReportArgs{}
 	reply := ReportReply{}
+	switch a.(type) {
+	case string:
+		args.Tag = 0
+		args.Filename = a.(string)
+	case int:
+		args.Tag = 1
+		args.Reduceno = a.(int)
+	}
 	call("Coordinator.ReportDone", &args, &reply)
 }
 
-func GetID() int {
-	args := InitArgs{}
-	reply := InitReply{}
-	call("Coordinator.InitId", &args, &reply)
-	return reply.Id
-}
+// func GetID() int {
+// 	args := InitArgs{}
+// 	reply := InitReply{}
+// 	call("Coordinator.InitId", &args, &reply)
+// 	return reply.Id
+// }
 
-func write2tmpfile(kva []KeyValue, id int, nReduce int) {
+func write2tmpfile(kva []KeyValue, maptaskfile string, nReduce int) {
 
+	// workerid := strconv.Itoa(id)
+	fileinfos, err := ioutil.ReadDir(".")
+	if err != nil {
+		log.Fatal(err)
+	}
+	prefix := "mr-" + strconv.Itoa(ihash(maptaskfile)) + "-"
+	//删除已经存在的
+	for _, fileinfo := range fileinfos {
+		if strings.HasPrefix(fileinfo.Name(), prefix) {
+			os.Remove(fileinfo.Name())
+		}
+	}
 	for _, kv := range kva {
 		reduceid := strconv.Itoa(ihash(kv.Key) % nReduce)
-		workerid := strconv.Itoa(id)
-		filename := "mr-" + workerid + "-" + reduceid
+		filename := prefix + reduceid
+		// fmt.Println(filename)
 		file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			log.Fatal("can't create middle file")
