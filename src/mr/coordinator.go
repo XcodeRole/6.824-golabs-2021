@@ -10,21 +10,16 @@ import (
 	"time"
 )
 
-type maptask struct {
-	filename string
-	counter  int
-}
-
-type reducetask struct {
-	reduceno int
-	counter  int
-}
+//任务类型
+type maptask string
+type reducetask int
 
 type Mapqueue struct {
 	q  []maptask
 	mu sync.Mutex
 }
 
+//内部带锁的reducetask的队列，后续的结构体函数都是sync的
 type Reducequeue struct {
 	q  []reducetask
 	mu sync.Mutex
@@ -54,19 +49,19 @@ func (mq *Mapqueue) Dequeue() maptask {
 	return task
 }
 
-func (mq *Mapqueue) Outbyvalue(delno string) maptask {
-	// mq.mu.Lock()
-	// defer mq.mu.Unlock()
-	var task maptask
-	for i := 0; i < len(mq.q); i++ {
-		if mq.q[i].filename == delno {
-			task = mq.q[i]
-			mq.q = append(mq.q[:i], mq.q[i+1:]...)
-			break
-		}
-	}
-	return task
-}
+// func (mq *Mapqueue) Outbyvalue(delno string) maptask {
+// 	// mq.mu.Lock()
+// 	// defer mq.mu.Unlock()
+// 	var task maptask
+// 	for i := 0; i < len(mq.q); i++ {
+// 		if mq.q[i].filename == delno {
+// 			task = mq.q[i]
+// 			mq.q = append(mq.q[:i], mq.q[i+1:]...)
+// 			break
+// 		}
+// 	}
+// 	return task
+// }
 
 func (rq *Reducequeue) isEmpty() bool {
 	rq.mu.Lock()
@@ -92,18 +87,71 @@ func (rq *Reducequeue) Dequeue() reducetask {
 	return task
 }
 
-func (rq *Reducequeue) Outbyvalue(delno int) reducetask {
-	// rq.mu.Lock()
-	// defer rq.mu.Unlock()
-	var task reducetask
-	for i := 0; i < len(rq.q); i++ {
-		if rq.q[i].reduceno == delno {
-			task = rq.q[i]
-			rq.q = append(rq.q[:i], rq.q[i+1:]...)
-			break
-		}
+// func (rq *Reducequeue) Outbyvalue(delno int) reducetask {
+// 	// rq.mu.Lock()
+// 	// defer rq.mu.Unlock()
+// 	var task reducetask
+// 	for i := 0; i < len(rq.q); i++ {
+// 		if rq.q[i].reduceno == delno {
+// 			task = rq.q[i]
+// 			rq.q = append(rq.q[:i], rq.q[i+1:]...)
+// 			break
+// 		}
+// 	}
+// 	return task
+// }
+
+//正在运行的任务队列，用map实现，同样内部带锁，后续的操作都是sync的
+type runmapmanager struct {
+	runlist map[maptask]int
+	mu      sync.Mutex
+}
+
+type runreducemanager struct {
+	runlist map[reducetask]int //value - counter , 用来判断是否超时
+	mu      sync.Mutex
+}
+
+func (r *runmapmanager) isEmpty() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.runlist) == 0
+}
+func (r *runreducemanager) isEmpty() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.runlist) == 0
+}
+
+func (r *runmapmanager) syncenmap(task maptask, counter int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.runlist[task] = counter
+}
+func (r *runreducemanager) syncenmap(task reducetask, counter int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.runlist[task] = counter
+}
+
+//由于for循环遍历也要加锁，我不知该咋解决，所以把del改为不加锁的，在业务代码中显式加锁
+func (r *runmapmanager) del(task maptask) {
+	delete(r.runlist, task)
+}
+func (r *runreducemanager) del(task reducetask) {
+	delete(r.runlist, task)
+}
+
+//时间加1,异步的
+func (r *runmapmanager) timeplus() {
+	for k := range r.runlist {
+		r.runlist[k]++
 	}
-	return task
+}
+func (r *runreducemanager) timeplus() {
+	for k := range r.runlist {
+		r.runlist[k]++
+	}
 }
 
 /*
@@ -117,9 +165,9 @@ type Coordinator struct {
 	// idcounter     int
 	// 不用counter，四个队列来管理
 	waitformap    Mapqueue
-	runmap        Mapqueue
+	runmap        runmapmanager
 	waitforreduce Reducequeue
-	runreduce     Reducequeue
+	runreduce     runreducemanager
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -127,15 +175,15 @@ func (c *Coordinator) Dispatch(args *DispatchArgs, reply *DispatchReply) error {
 	if !c.waitformap.isEmpty() {
 		reply.TaskType = 0
 		task := c.waitformap.Dequeue()
-		c.runmap.Enqueue(task)
-		reply.Filename = task.filename
+		c.runmap.syncenmap(task, 0)
+		reply.Filename = string(task)
 	} else if !c.runmap.isEmpty() { //wait util all map task done
 		reply.TaskType = 1
 	} else if !c.waitforreduce.isEmpty() {
 		reply.TaskType = 2
 		task := c.waitforreduce.Dequeue()
-		c.runreduce.Enqueue(task)
-		reply.NoReduce = task.reduceno
+		c.runreduce.syncenmap(task, 0)
+		reply.NoReduce = int(task)
 	} else if !c.runreduce.isEmpty() {
 		/*
 			这种情况是考虑到当前worker要等待其他worker执行完reduce。
@@ -154,39 +202,38 @@ func (c *Coordinator) ReportDone(args *ReportArgs, reply *ReportReply) error {
 	switch args.Tag {
 	case 0:
 		c.runmap.mu.Lock()
-		c.runmap.Outbyvalue(args.Filename)
+		c.runmap.del(maptask(args.Filename))
 		c.runmap.mu.Unlock()
 	case 1:
 		c.runreduce.mu.Lock()
-		c.runreduce.Outbyvalue(args.Reduceno)
+		c.runreduce.del(reducetask(args.Reduceno))
 		c.runreduce.mu.Unlock()
 	}
 	return nil
 }
 
+//coordinator开一个协程来对正在运行的任务进行计时
 func (c *Coordinator) timemanager() {
 	for {
 		time.Sleep(time.Second)
 		if !c.runmap.isEmpty() {
 			c.runmap.mu.Lock()
-			for i := 1; i < len(c.runmap.q); i++ {
-				c.runmap.q[i].counter++
-				if c.runmap.q[i].counter > 10 {
-					task := c.runmap.Outbyvalue(c.runmap.q[i].filename)
-					c.waitformap.Enqueue(task)
-					i--
+			c.runmap.timeplus()
+			for k, v := range c.runmap.runlist {
+				if v > 10 {
+					c.waitformap.Enqueue(k)
+					c.runmap.del(k)
 				}
 			}
 			c.runmap.mu.Unlock()
 		}
 		if !c.runreduce.isEmpty() {
 			c.runreduce.mu.Lock()
-			for i := 1; i < len(c.runreduce.q); i++ {
-				c.runreduce.q[i].counter++
-				if c.runreduce.q[i].counter > 10 {
-					task := c.runreduce.Outbyvalue(c.runreduce.q[i].reduceno)
-					c.waitforreduce.Enqueue(task)
-					i--
+			c.runreduce.timeplus()
+			for k, v := range c.runreduce.runlist {
+				if v > 10 {
+					c.waitforreduce.Enqueue(k)
+					c.runreduce.del(k)
 				}
 			}
 			c.runreduce.mu.Unlock()
@@ -264,6 +311,7 @@ func (c *Coordinator) Done() bool {
 	//四个队列全空，结束
 	if c.waitformap.isEmpty() && c.runmap.isEmpty() && c.waitforreduce.isEmpty() && c.runreduce.isEmpty() {
 		ret = true
+		//等待两秒，给worker返回结束信息
 		time.Sleep(time.Second * 2)
 	}
 	return ret
@@ -277,14 +325,14 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// Your code here.
 	waitformap := Mapqueue{mu: sync.Mutex{}}
-	runmap := Mapqueue{mu: sync.Mutex{}}
+	runmap := runmapmanager{mu: sync.Mutex{}, runlist: map[maptask]int{}}
 	waitforreduce := Reducequeue{mu: sync.Mutex{}}
-	runreduce := Reducequeue{mu: sync.Mutex{}}
+	runreduce := runreducemanager{mu: sync.Mutex{}, runlist: map[reducetask]int{}}
 	for _, file := range files {
-		waitformap.Enqueue(maptask{filename: file, counter: 0})
+		waitformap.Enqueue(maptask(file))
 	}
 	for i := 0; i < nReduce; i++ {
-		waitforreduce.Enqueue(reducetask{reduceno: i, counter: 0})
+		waitforreduce.Enqueue(reducetask(i))
 	}
 	c := Coordinator{
 		waitformap:    waitformap,

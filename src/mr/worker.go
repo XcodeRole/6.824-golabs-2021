@@ -67,7 +67,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			write2tmpfile(kva, reply.Filename, nReduce)
 			ReportDone(reply.Filename)
 		case 1:
-			time.Sleep(time.Second)
+			time.Sleep(time.Second * 3)
 		case 2:
 			files, err := ioutil.ReadDir(".")
 			if err != nil {
